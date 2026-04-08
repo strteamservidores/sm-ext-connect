@@ -1,18 +1,17 @@
-```yaml
 name: Extension builder (Ultra Compatible)
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
     tags: ["*"]
   pull_request:
-    branches: [master]
+    branches: [master, main]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest # O runner hospeda o container
 
-    name: Linux Build (Ultra Compatible)
+    name: Linux Build (Ubuntu 18.04 GLIBC)
 
     container:
       image: ubuntu:18.04
@@ -22,89 +21,71 @@ jobs:
       SDKS: 'csgo css hl2dm dods tf2'
       MMSOURCE_VERSION: '1.12'
       SOURCEMOD_VERSION: '1.12'
-      CACHE_PATH: /cache
-
-      CC: gcc
-      CXX: g++
-
-      # 🔥 FLAGS COMPATÍVEIS COM SERVIDORES ANTIGOS
-      CFLAGS: "-m32 -fPIC"
-      CXXFLAGS: "-m32 -fPIC -static-libstdc++ -static-libgcc -Wno-error"
-      LDFLAGS: "-m32"
+      # Usar o workspace do GitHub para evitar problemas de permissão fora do path
+      CACHE_PATH: ${{ github.workspace }}/deps 
 
     steps:
-      - name: Install dependencies (Ubuntu 18.04)
+      - name: Install System Dependencies
         run: |
+          apt-get update
+          apt-get install -y software-properties-common
+          # Adicionar repo para Git mais recente se necessário, mas 18.04 costuma servir
           dpkg --add-architecture i386
           apt-get update
           apt-get install -y \
-            gcc g++ \
             gcc-multilib g++-multilib \
-            libc6-dev libc6-dev-i386 \
-            libstdc++6 lib32stdc++6 \
-            lib32z1-dev zlib1g-dev \
-            python3 python3-pip \
-            git make curl
-
-      - name: Setup Python
-        run: |
-          python3 -m pip install --upgrade pip setuptools wheel
+            libc6-dev-i386 lib32stdc++6 \
+            lib32z1-dev \
+            python3 python3-pip python3-setuptools \
+            git curl ca-certificates
 
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          path: extension
+        # Nota: Se o checkout falhar por causa do Node no 18.04, 
+        # o GitHub Actions automaticamente tenta usar uma versão compatível.
 
-      - name: Prepare cache dir
-        run: mkdir -p "${{ env.CACHE_PATH }}"
-
-      - name: Install SourceMod dependencies
+      - name: Install AMBuild & Dependencies
         run: |
-          cd "${{ env.CACHE_PATH }}"
+          mkdir -p ${{ env.CACHE_PATH }}
+          cd ${{ env.CACHE_PATH }}
+          
+          # Instalar AMBuild via Pip é mais rápido e seguro que clonar o repo
+          python3 -m pip install git+https://github.com/alliedmodders/ambuild
 
           shallow_checkout () {
               if [ ! -d "$3" ]; then
                   git clone "$1" --depth 1 --branch "$2" "$3"
+              else
+                  cd "$3"
+                  git fetch --depth 1 origin "$2"
+                  git checkout FETCH_HEAD
+                  cd ..
               fi
-              cd "$3"
-              git fetch --depth 1 origin "$2"
-              git checkout FETCH_HEAD
-              git submodule update --init --depth 1
-              cd ..
           }
 
-          for sdk in ${{ env.SDKS }}
-          do
+          for sdk in ${{ env.SDKS }}; do
               shallow_checkout "https://github.com/alliedmodders/hl2sdk" "${sdk}" "hl2sdk-${sdk}"
           done
 
-          shallow_checkout "https://github.com/alliedmodders/ambuild" "master" "ambuild"
           shallow_checkout "https://github.com/alliedmodders/sourcemod" "${{env.SOURCEMOD_VERSION}}-dev" "sourcemod"
-          shallow_checkout "https://github.com/alliedmodders/metamod-source/" "${{env.MMSOURCE_VERSION}}-dev" "metamod-source"
-
-      - name: Setup AMBuild
-        run: |
-          cd "${{ env.CACHE_PATH }}"
-          python3 -m pip install ./ambuild
+          shallow_checkout "https://github.com/alliedmodders/metamod-source/" "${{env.MMSOURCE_VERSION}}-dev" "metamod"
 
       - name: Build extension
-        working-directory: extension
         run: |
-          mkdir build && cd build
-
+          mkdir -p build
+          cd build
+          # Ajuste nos caminhos para refletir o checkout padrão (./)
           python3 ../configure.py \
-            --enable-auto-versioning \
             --enable-optimize \
             --sdks="${{ env.SDKS }}" \
-            --mms-path="${{ env.CACHE_PATH }}/metamod-source" \
+            --mms-path="${{ env.CACHE_PATH }}/metamod" \
             --hl2sdk-root="${{ env.CACHE_PATH }}" \
             --sm-path="${{ env.CACHE_PATH }}/sourcemod"
-
-          ambuild
+          
+          # O caminho do ambuild no 18.04 pode exigir o prefixo python3
+          python3 -m ambuild
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-ultra-compatible
-          path: extension/build/package
-```
+          name: ${{ env.PROJECT }}-linux-compat
