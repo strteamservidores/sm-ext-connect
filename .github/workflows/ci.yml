@@ -1,4 +1,4 @@
-name: Extension builder
+name: Extension builder (Linux)
 
 on:
   push:
@@ -9,19 +9,9 @@ on:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-22.04, windows-2022]
-        include:
-          - os: ubuntu-22.04
-            cc: clang
-            cxx: clang++
-          - os: windows-2022
-            cc: msvc
-      fail-fast: false
+    runs-on: ubuntu-22.04
 
-    name: ${{ matrix.os }} - ${{ matrix.cc }}
-    runs-on: ${{ matrix.os }}
+    name: Linux Build (GCC)
 
     env:
       PROJECT: 'connect'
@@ -30,33 +20,34 @@ jobs:
       SOURCEMOD_VERSION: '1.12'
       CACHE_PATH: ${{ github.workspace }}/cache
 
-      # 🔥 ESSENCIAL PRA COMPATIBILIDADE
+      # 🔥 COMPATIBILIDADE MÁXIMA
+      CC: gcc
+      CXX: g++
       CFLAGS: "-m32 -fPIC"
       CXXFLAGS: "-m32 -fPIC -static-libstdc++ -static-libgcc"
       LDFLAGS: "-m32"
 
     steps:
       - name: Concatenate SDK Names
-        shell: bash
         run: |
           SDKS_VAR="${{env.SDKS}}"
           echo "SDKS_KEY=${SDKS_VAR//[[:blank:]]/}" >> $GITHUB_ENV
 
-      # 🔥 DEPENDÊNCIAS OTIMIZADAS
-      - name: Linux dependencies
-        if: startsWith(runner.os, 'Linux')
+      # 🔥 DEPENDÊNCIAS LINUX (32-BIT + BUILD)
+      - name: Install dependencies
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang \
+            gcc g++ \
             gcc-multilib g++-multilib \
             libc6-dev libc6-dev-i386 \
             libstdc++6 lib32stdc++6 \
             lib32z1-dev zlib1g-dev \
             make git
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: 3.9
 
@@ -64,19 +55,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
 
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           path: extension
 
-      - uses: actions/cache@v4
+      - name: Cache dependencies
+        uses: actions/cache@v4
         if: ${{ ! startsWith(github.ref, 'refs/tags/') }}
         with:
           path: ${{ env.CACHE_PATH }}
-          key: ${{ runner.os }}-sm${{ env.SOURCEMOD_VERSION }}-${{ env.SDKS_KEY }}
+          key: linux-sm${{ env.SOURCEMOD_VERSION }}-${{ env.SDKS_KEY }}
 
-      - name: Install dependencies
-        shell: bash
+      - name: Install SourceMod dependencies
         run: |
           mkdir -p "${{ env.CACHE_PATH }}"
           cd "${{ env.CACHE_PATH }}"
@@ -106,15 +98,8 @@ jobs:
           cd "${{ env.CACHE_PATH }}"
           python -m pip install ./ambuild
 
-      - name: Select compiler
-        if: startsWith(runner.os, 'Linux')
-        run: |
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
-
-      # 🔥 BUILD COM COMPATIBILIDADE
-      - name: Build
-        shell: bash
+      # 🔥 BUILD FINAL
+      - name: Build extension
         working-directory: extension
         run: |
           mkdir build && cd build
@@ -132,5 +117,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ runner.os }}
+          name: linux-build
           path: extension/build/package
