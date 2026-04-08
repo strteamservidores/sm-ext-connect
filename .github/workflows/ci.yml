@@ -1,4 +1,4 @@
-name: Extension builder (Ultra Compatible)
+name: Extension builder (CSGO Linux Stable)
 
 on:
   push:
@@ -9,15 +9,19 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
-    name: Linux Build (Docker Ultra Compat)
+    runs-on: ubuntu-20.04
+    name: Linux Build (CSGO)
 
     env:
       PROJECT: 'connect'
-      SDKS: 'csgo css hl2dm dods tf2'
+      SDKS: 'csgo'
       MMSOURCE_VERSION: '1.12'
       SOURCEMOD_VERSION: '1.12'
+      CACHE_PATH: ${{ github.workspace }}/cache
+      # Definimos as flags aqui, mas garantimos que o Python as use no build
+      CFLAGS: "-m32 -fPIC"
+      CXXFLAGS: "-m32 -fPIC -static-libstdc++ -static-libgcc -Wno-error"
+      LDFLAGS: "-m32"
 
     steps:
       - name: Checkout repo
@@ -25,73 +29,74 @@ jobs:
         with:
           path: extension
 
-      # 🔥 BUILD DENTRO DO UBUNTU 18.04 (SEM QUEBRAR ACTIONS)
-      - name: Build inside Ubuntu 18.04 container
+      - name: Install dependencies
         run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            ubuntu:18.04 \
-            bash -c "
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-9 g++-9 \
+            gcc-9-multilib g++-9-multilib \
+            libc6-dev-i386 lib32stdc++6 \
+            lib32z1-dev \
+            python3 python3-pip \
+            git make
 
-            apt-get update && apt-get install -y \
-              gcc g++ \
-              gcc-multilib g++-multilib \
-              libc6-dev libc6-dev-i386 \
-              libstdc++6 lib32stdc++6 \
-              lib32z1-dev zlib1g-dev \
-              python3 python3-pip \
-              git make
+          # Atualiza as variáveis de ambiente para usar a versão 9 explicitamente
+          echo "CC=gcc-9" >> $GITHUB_ENV
+          echo "CXX=g++-9" >> $GITHUB_ENV
 
-            cd extension
+      - name: Setup Python
+        run: |
+          python3 -m pip install --upgrade pip setuptools wheel
 
-            mkdir -p cache
-            cd cache
+      - name: Prepare cache
+        run: mkdir -p "${{ env.CACHE_PATH }}"
 
-            shallow_checkout () {
-                if [ ! -d \"\$3\" ]; then
-                    git clone \"\$1\" --depth 1 --branch \"\$2\" \"\$3\"
-                fi
-                cd \"\$3\"
-                git fetch --depth 1 origin \"\$2\"
-                git checkout FETCH_HEAD
-                git submodule update --init --depth 1
-                cd ..
-            }
+      - name: Install SM + SDK dependencies
+        run: |
+          cd "${{ env.CACHE_PATH }}"
 
-            for sdk in csgo css hl2dm dods tf2
-            do
-                shallow_checkout https://github.com/alliedmodders/hl2sdk \$sdk hl2sdk-\$sdk
-            done
+          shallow_checkout () {
+              if [ ! -d "$3" ]; then
+                  git clone "$1" --depth 1 --branch "$2" "$3"
+              else
+                  cd "$3"
+                  git fetch --depth 1 origin "$2"
+                  git checkout FETCH_HEAD
+                  cd ..
+              fi
+          }
 
-            shallow_checkout https://github.com/alliedmodders/ambuild master ambuild
-            shallow_checkout https://github.com/alliedmodders/sourcemod ${SOURCEMOD_VERSION}-dev sourcemod
-            shallow_checkout https://github.com/alliedmodders/metamod-source ${MMSOURCE_VERSION}-dev metamod-source
+          # Usando as variáveis de ambiente do GitHub Actions para maior segurança
+          shallow_checkout https://github.com/alliedmodders/hl2sdk csgo hl2sdk-csgo
+          shallow_checkout https://github.com/alliedmodders/ambuild master ambuild
+          shallow_checkout https://github.com/alliedmodders/sourcemod "${{ env.SOURCEMOD_VERSION }}-dev" sourcemod
+          shallow_checkout https://github.com/alliedmodders/metamod-source "${{ env.MMSOURCE_VERSION }}-dev" metamod-source
 
-            python3 -m pip install ./ambuild
+      - name: Setup AMBuild
+        run: |
+          cd "${{ env.CACHE_PATH }}"
+          # Instalação direta para garantir que o binário 'ambuild' fique no PATH
+          python3 -m pip install ./ambuild
 
-            cd ../
-            mkdir build && cd build
+      - name: Build extension
+        working-directory: extension
+        run: |
+          mkdir -p build && cd build
 
-            export CC=gcc
-            export CXX=g++
-            export CFLAGS='-m32 -fPIC'
-            export CXXFLAGS='-m32 -fPIC -static-libstdc++ -static-libgcc -Wno-error'
-            export LDFLAGS='-m32'
+          python3 ../configure.py \
+            --enable-auto-versioning \
+            --enable-optimize \
+            --sdks="csgo" \
+            --mms-path="${{ env.CACHE_PATH }}/metamod-source" \
+            --hl2sdk-root="${{ env.CACHE_PATH }}" \
+            --sm-path="${{ env.CACHE_PATH }}/sourcemod"
 
-            python3 ../configure.py \
-              --enable-auto-versioning \
-              --enable-optimize \
-              --sdks='csgo css hl2dm dods tf2' \
-              --mms-path='../cache/metamod-source' \
-              --hl2sdk-root='../cache' \
-              --sm-path='../cache/sourcemod'
-
-            ambuild
-            "
+          # Executa via python para evitar erros de "command not found" caso o PATH do pip mude
+          python3 -m ambuild
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-ultra-compatible
+          name: csgo-linux-build
           path: extension/build/package
